@@ -11,7 +11,7 @@ const EditVisit = () => {
   useEffect(() => {
     const fetchVisitData = async () => {
       if (!visitId) {
-        navigate('/bh/new-visit');
+        navigate('/bh/my-visits');
         return;
       }
       

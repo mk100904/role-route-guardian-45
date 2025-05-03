@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { z } from "zod";
@@ -158,14 +157,12 @@ const NewVisit = () => {
       if (error) throw error;
 
       // Transform data to make it easier to work with
-      const branches = data.map(item => {
-        return {
-          id: item.branches.id,
-          name: item.branches.name,
-          location: item.branches.location,
-          category: item.branches.category,
-        };
-      });
+      const branches = data.map(item => ({
+        id: item.branches.id,
+        name: item.branches.name,
+        location: item.branches.location,
+        category: item.branches.category,
+      }));
 
       setAssignedBranches(branches);
     } catch (error) {

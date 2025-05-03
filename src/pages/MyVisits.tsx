@@ -146,7 +146,7 @@ const MyVisits = () => {
       navigate(`/bh/edit-visit/${visit.id}`);
     } else {
       toast({
-        variant: "warning",
+        variant: "destructive", // Changed from "warning" to "destructive"
         title: "Cannot edit visit",
         description: "Only draft visits can be edited.",
       });
