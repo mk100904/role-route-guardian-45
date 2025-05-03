@@ -1,5 +1,5 @@
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -70,11 +70,13 @@ const NewVisit = () => {
   const navigate = useNavigate();
   const [branches, setBranches] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
-
+  const [selectedBranch, setSelectedBranch] = useState<any>(null);
+  
   // Use react-hook-form with zod validation
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
+      visit_date: new Date(), // Default to today's date
       hr_connect_session: false,
       manning_percentage: 0,
       attrition_percentage: 0,
@@ -90,9 +92,12 @@ const NewVisit = () => {
 
   // Watch the hr_connect_session field to conditionally show related fields
   const hrConnectSession = form.watch("hr_connect_session");
+  
+  // Watch branch_id to fetch branch details
+  const selectedBranchId = form.watch("branch_id");
 
   // Fetch branches assigned to the user
-  React.useEffect(() => {
+  useEffect(() => {
     const fetchBranches = async () => {
       if (!user) return;
       
@@ -104,7 +109,8 @@ const NewVisit = () => {
               id,
               name,
               location,
-              category
+              category,
+              branch_code
             )
           `)
           .eq("user_id", user.id);
@@ -117,7 +123,8 @@ const NewVisit = () => {
             id: item.branches.id,
             name: item.branches.name,
             location: item.branches.location,
-            category: item.branches.category
+            category: item.branches.category,
+            branch_code: item.branches.branch_code
           };
         });
         
@@ -134,6 +141,16 @@ const NewVisit = () => {
     
     fetchBranches();
   }, [user]);
+
+  // Update selected branch when branch_id changes
+  useEffect(() => {
+    if (selectedBranchId) {
+      const branch = branches.find(b => b.id === selectedBranchId);
+      setSelectedBranch(branch);
+    } else {
+      setSelectedBranch(null);
+    }
+  }, [selectedBranchId, branches]);
 
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     if (!user) return;
@@ -175,28 +192,59 @@ const NewVisit = () => {
     }
   };
 
-  // Helper function to render Yes/No buttons for qualitative assessment
-  const renderYesNoOptions = (fieldName: any) => {
-    return (
-      <div className="flex space-x-2">
-        <Button
-          type="button"
-          variant={form.getValues(fieldName) === "good" ? "default" : "outline"}
-          className={`w-28 ${form.getValues(fieldName) === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
-          onClick={() => form.setValue(fieldName, "good")}
-        >
-          <Check className="mr-2 h-4 w-4" /> Yes
-        </Button>
-        <Button
-          type="button"
-          variant={form.getValues(fieldName) === "poor" ? "default" : "outline"}
-          className={`w-28 ${form.getValues(fieldName) === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
-          onClick={() => form.setValue(fieldName, "poor")}
-        >
-          <X className="mr-2 h-4 w-4" /> No
-        </Button>
-      </div>
-    );
+  const handleSubmitForReview = async () => {
+    const values = form.getValues();
+    if (!user) return;
+    
+    try {
+      setSubmitting(true);
+      
+      // Prepare data for submission
+      const visitData = {
+        ...values,
+        user_id: user.id,
+        status: "submitted", // Set status to submitted
+        created_at: new Date().toISOString(),
+      };
+      
+      const { data, error } = await supabase
+        .from("branch_visits")
+        .insert(visitData)
+        .select();
+        
+      if (error) throw error;
+      
+      toast({
+        title: "Visit report submitted",
+        description: "Your visit report has been submitted for review.",
+      });
+      
+      navigate("/bh/my-visits");
+    } catch (error: any) {
+      console.error("Error submitting visit:", error);
+      toast({
+        variant: "destructive",
+        title: "Failed to submit visit",
+        description: error.message || "There was an error submitting your visit report.",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancel = () => {
+    // Navigate back to "My Visits" page without saving
+    navigate("/bh/my-visits");
+  };
+
+  // Calculate HR Connect Session Coverage
+  const calculateCoverage = () => {
+    const totalInvited = form.getValues("total_employees_invited");
+    const totalParticipants = form.getValues("total_participants");
+    
+    if (!totalInvited || totalInvited === 0) return 0;
+    
+    return ((totalParticipants || 0) / totalInvited) * 100;
   };
 
   return (
@@ -279,6 +327,24 @@ const NewVisit = () => {
               />
             </div>
 
+            {/* Branch details display when branch is selected */}
+            {selectedBranch && (
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <p className="text-sm font-medium mb-1">Branch Code</p>
+                  <p className="text-base border border-input bg-background px-3 py-2 rounded-md">
+                    {selectedBranch.branch_code || "N/A"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium mb-1">Branch Category</p>
+                  <p className="text-base border border-input bg-background px-3 py-2 rounded-md capitalize">
+                    {selectedBranch.category || "N/A"}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="mt-4">
               <h4 className="text-lg font-medium mb-2">HR Connect Session</h4>
               <div className="flex space-x-2 mb-4">
@@ -329,6 +395,13 @@ const NewVisit = () => {
                       </FormItem>
                     )}
                   />
+
+                  <div>
+                    <p className="text-sm font-medium mb-1">Coverage (%)</p>
+                    <p className="text-base border border-input bg-background px-3 py-2 rounded-md">
+                      {calculateCoverage().toFixed(2)}%
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -514,9 +587,24 @@ const NewVisit = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Are leaders aligned with the organization code?</FormLabel>
-                    <FormControl>
-                      {renderYesNoOptions("leaders_aligned_with_code")}
-                    </FormControl>
+                    <div className="flex space-x-2">
+                      <Button
+                        type="button"
+                        variant={field.value === "good" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
+                        onClick={() => form.setValue("leaders_aligned_with_code", "good")}
+                      >
+                        <Check className="mr-2 h-4 w-4" /> Yes
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={field.value === "poor" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
+                        onClick={() => form.setValue("leaders_aligned_with_code", "poor")}
+                      >
+                        <X className="mr-2 h-4 w-4" /> No
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -528,9 +616,24 @@ const NewVisit = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Do employees feel safe?</FormLabel>
-                    <FormControl>
-                      {renderYesNoOptions("employees_feel_safe")}
-                    </FormControl>
+                    <div className="flex space-x-2">
+                      <Button
+                        type="button"
+                        variant={field.value === "good" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
+                        onClick={() => form.setValue("employees_feel_safe", "good")}
+                      >
+                        <Check className="mr-2 h-4 w-4" /> Yes
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={field.value === "poor" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
+                        onClick={() => form.setValue("employees_feel_safe", "poor")}
+                      >
+                        <X className="mr-2 h-4 w-4" /> No
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -542,9 +645,24 @@ const NewVisit = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Are employees motivated?</FormLabel>
-                    <FormControl>
-                      {renderYesNoOptions("employees_feel_motivated")}
-                    </FormControl>
+                    <div className="flex space-x-2">
+                      <Button
+                        type="button"
+                        variant={field.value === "good" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
+                        onClick={() => form.setValue("employees_feel_motivated", "good")}
+                      >
+                        <Check className="mr-2 h-4 w-4" /> Yes
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={field.value === "poor" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
+                        onClick={() => form.setValue("employees_feel_motivated", "poor")}
+                      >
+                        <X className="mr-2 h-4 w-4" /> No
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -556,9 +674,24 @@ const NewVisit = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Do leaders use abusive language?</FormLabel>
-                    <FormControl>
-                      {renderYesNoOptions("leaders_abusive_language")}
-                    </FormControl>
+                    <div className="flex space-x-2">
+                      <Button
+                        type="button"
+                        variant={field.value === "good" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
+                        onClick={() => form.setValue("leaders_abusive_language", "good")}
+                      >
+                        <Check className="mr-2 h-4 w-4" /> Yes
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={field.value === "poor" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
+                        onClick={() => form.setValue("leaders_abusive_language", "poor")}
+                      >
+                        <X className="mr-2 h-4 w-4" /> No
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -570,9 +703,24 @@ const NewVisit = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Are employees comfortable with escalation process?</FormLabel>
-                    <FormControl>
-                      {renderYesNoOptions("employees_comfort_escalation")}
-                    </FormControl>
+                    <div className="flex space-x-2">
+                      <Button
+                        type="button"
+                        variant={field.value === "good" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
+                        onClick={() => form.setValue("employees_comfort_escalation", "good")}
+                      >
+                        <Check className="mr-2 h-4 w-4" /> Yes
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={field.value === "poor" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
+                        onClick={() => form.setValue("employees_comfort_escalation", "poor")}
+                      >
+                        <X className="mr-2 h-4 w-4" /> No
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -584,9 +732,24 @@ const NewVisit = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Is there an inclusive culture?</FormLabel>
-                    <FormControl>
-                      {renderYesNoOptions("inclusive_culture")}
-                    </FormControl>
+                    <div className="flex space-x-2">
+                      <Button
+                        type="button"
+                        variant={field.value === "good" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
+                        onClick={() => form.setValue("inclusive_culture", "good")}
+                      >
+                        <Check className="mr-2 h-4 w-4" /> Yes
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={field.value === "poor" ? "default" : "outline"}
+                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
+                        onClick={() => form.setValue("inclusive_culture", "poor")}
+                      >
+                        <X className="mr-2 h-4 w-4" /> No
+                      </Button>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -616,9 +779,24 @@ const NewVisit = () => {
             />
           </div>
           
-          <div className="flex justify-end">
-            <Button type="submit" className="w-full md:w-auto" disabled={submitting}>
+          <div className="flex justify-end gap-4">
+            <Button type="button" variant="outline" onClick={handleCancel}>
+              Cancel
+            </Button>
+            <Button 
+              type="button" 
+              className="bg-amber-500 hover:bg-amber-600"
+              onClick={form.handleSubmit(onSubmit)}
+              disabled={submitting}
+            >
               {submitting ? "Saving..." : "Save as Draft"}
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSubmitForReview}
+              disabled={submitting}
+            >
+              {submitting ? "Submitting..." : "Submit for Review"}
             </Button>
           </div>
         </form>
