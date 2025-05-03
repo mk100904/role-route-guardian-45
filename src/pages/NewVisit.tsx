@@ -1,15 +1,13 @@
 
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useMemo } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
-import { CalendarIcon, Check, X, Save, Send } from "lucide-react";
-import { format } from "date-fns";
-import { cn } from "@/lib/utils";
-
+import { v4 as uuidv4 } from "uuid";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
+import { Input } from "@/components/ui/input";
 import {
   Form,
   FormControl,
@@ -19,12 +17,6 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -33,776 +25,1072 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { toast } from "@/components/ui/use-toast";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DatePicker } from "@/components/ui/date-picker";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/components/ui/use-toast";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Loader2, Save, Send } from "lucide-react";
 
-// Form schema for the branch visit form
 const formSchema = z.object({
-  branch_id: z.string().min(1, { message: "Branch is required" }),
-  visit_date: z.date({
-    required_error: "Visit date is required",
-  }),
-  hr_connect_session: z.boolean().default(false),
-  total_employees_invited: z.coerce.number().optional(),
-  total_participants: z.coerce.number().optional(),
-  manning_percentage: z.coerce.number().min(0).max(100).optional(),
-  attrition_percentage: z.coerce.number().min(0).max(100).optional(),
-  non_vendor_percentage: z.coerce.number().min(0).max(100).optional(),
-  er_percentage: z.coerce.number().min(0).max(100).optional(),
-  cwt_cases: z.coerce.number().min(0).optional(),
-  performance_level: z.string().optional(),
-  new_employees_total: z.coerce.number().min(0).optional(),
-  new_employees_covered: z.coerce.number().min(0).optional(),
-  star_employees_total: z.coerce.number().min(0).optional(),
-  star_employees_covered: z.coerce.number().min(0).optional(),
-  leaders_aligned_with_code: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
-  employees_feel_safe: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
-  employees_feel_motivated: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
-  leaders_abusive_language: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
-  employees_comfort_escalation: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
-  inclusive_culture: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
+  branchId: z.string().min(1, { message: "Branch is required" }),
+  visitDate: z.date(),
+  hrConnectSession: z.boolean().default(false),
+  totalEmployeesInvited: z.number().min(0).optional(),
+  totalParticipants: z.number().min(0).optional(),
+  
+  newEmployeesTotal: z.number().min(0).optional(),
+  newEmployeesCovered: z.number()
+    .min(0)
+    .refine(val => val === undefined || val === 0 || val <= z.number().optional().parse(undefined), {
+      message: "Covered must be less than or equal to total",
+    })
+    .optional(),
+    
+  starEmployeesTotal: z.number().min(0).optional(),
+  starEmployeesCovered: z.number()
+    .min(0)
+    .refine(val => val === undefined || val === 0 || val <= z.number().optional().parse(undefined), {
+      message: "Covered must be less than or equal to total",
+    })
+    .optional(),
+    
+  manningPercentage: z.number().min(0).max(100).optional(),
+  attritionPercentage: z.number().min(0).max(100).optional(),
+  nonVendorPercentage: z.number().min(0).max(100).optional(),
+  erPercentage: z.number().min(0).max(100).optional(),
+  cwtCases: z.number().min(0).optional(),
+  
+  performanceLevel: z.enum(["below_expectations", "meets_expectations", "exceeds_expectations"]).optional(),
+  
+  leadersAlignedWithCode: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
+  employeesFeelSafe: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
+  employeesFeelMotivated: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
+  leadersAbusiveLanguage: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
+  employeesComfortEscalation: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
+  inclusiveCulture: z.enum(["very_poor", "poor", "neutral", "good", "excellent"]).optional(),
+  
   feedback: z.string().optional(),
 });
 
+type FormValues = z.infer<typeof formSchema>;
+
 const NewVisit = () => {
+  const [assignedBranches, setAssignedBranches] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [activeTab, setActiveTab] = useState("branch-info");
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [branches, setBranches] = useState<any[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-  const [selectedBranch, setSelectedBranch] = useState<any>(null);
+  const location = useLocation();
   
-  // Use react-hook-form with zod validation
-  const form = useForm<z.infer<typeof formSchema>>({
+  // Check if we're in edit mode
+  const queryParams = new URLSearchParams(window.location.search);
+  const editMode = queryParams.get('edit') !== null;
+  const editData = location.state;
+  
+  // Form initialization with default values or edit data
+  const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      visit_date: new Date(), // Default to today's date
-      hr_connect_session: false,
-      manning_percentage: 0,
-      attrition_percentage: 0,
-      non_vendor_percentage: 0,
-      er_percentage: 0,
-      cwt_cases: 0,
-      new_employees_total: 0,
-      new_employees_covered: 0,
-      star_employees_total: 0,
-      star_employees_covered: 0,
-    },
+      branchId: editMode && editData ? editData.branch_id : "",
+      visitDate: editMode && editData ? new Date(editData.visit_date) : new Date(),
+      hrConnectSession: editMode && editData ? editData.hr_connect_session : false,
+      totalEmployeesInvited: editMode && editData ? editData.total_employees_invited : 0,
+      totalParticipants: editMode && editData ? editData.total_participants : 0,
+      newEmployeesTotal: editMode && editData ? editData.new_employees_total : 0,
+      newEmployeesCovered: editMode && editData ? editData.new_employees_covered : 0,
+      starEmployeesTotal: editMode && editData ? editData.star_employees_total : 0,
+      starEmployeesCovered: editMode && editData ? editData.star_employees_covered : 0,
+      manningPercentage: editMode && editData ? editData.manning_percentage : 0,
+      attritionPercentage: editMode && editData ? editData.attrition_percentage : 0,
+      nonVendorPercentage: editMode && editData ? editData.non_vendor_percentage : 0,
+      erPercentage: editMode && editData ? editData.er_percentage : 0,
+      cwtCases: editMode && editData ? editData.cwt_cases : 0,
+      performanceLevel: editMode && editData ? editData.performance_level : undefined,
+      leadersAlignedWithCode: editMode && editData ? editData.leaders_aligned_with_code : undefined,
+      employeesFeelSafe: editMode && editData ? editData.employees_feel_safe : undefined,
+      employeesFeelMotivated: editMode && editData ? editData.employees_feel_motivated : undefined,
+      leadersAbusiveLanguage: editMode && editData ? editData.leaders_abusive_language : undefined,
+      employeesComfortEscalation: editMode && editData ? editData.employees_comfort_escalation : undefined,
+      inclusiveCulture: editMode && editData ? editData.inclusive_culture : undefined,
+      feedback: editMode && editData ? editData.feedback : "",
+    }
   });
-
-  // Watch the hr_connect_session field to conditionally show related fields
-  const hrConnectSession = form.watch("hr_connect_session");
   
-  // Watch branch_id to fetch branch details
-  const selectedBranchId = form.watch("branch_id");
+  // Watch form values for dynamic calculations
+  const watchHrConnectSession = form.watch("hrConnectSession");
+  const watchTotalEmployeesInvited = form.watch("totalEmployeesInvited") || 0;
+  const watchTotalParticipants = form.watch("totalParticipants") || 0;
+  
+  // Calculate the HR Connect coverage percentage
+  const hrConnectCoverage = useMemo(() => {
+    if (watchTotalEmployeesInvited > 0 && watchTotalParticipants > 0) {
+      return Math.round((watchTotalParticipants / watchTotalEmployeesInvited) * 100);
+    }
+    return 0;
+  }, [watchTotalEmployeesInvited, watchTotalParticipants]);
 
-  // Fetch branches assigned to the user
   useEffect(() => {
-    const fetchBranches = async () => {
-      if (!user) return;
-      
-      try {
-        const { data, error } = await supabase
-          .from("branch_assignments")
-          .select(`
-            branches:branch_id (
-              id,
-              name,
-              location,
-              category,
-              branch_code
-            )
-          `)
-          .eq("user_id", user.id);
-          
-        if (error) throw error;
-        
-        // Transform data to a simpler format
-        const formattedBranches = data.map((item: any) => {
-          return {
-            id: item.branches.id,
-            name: item.branches.name,
-            location: item.branches.location,
-            category: item.branches.category,
-            branch_code: item.branches.branch_code
-          };
-        });
-        
-        setBranches(formattedBranches);
-      } catch (error) {
-        console.error("Error fetching branches:", error);
-        toast({
-          variant: "destructive",
-          title: "Failed to load branches",
-          description: "There was an error loading your assigned branches.",
-        });
-      }
-    };
-    
-    fetchBranches();
+    if (user) {
+      fetchAssignedBranches();
+    }
   }, [user]);
 
-  // Update selected branch when branch_id changes
-  useEffect(() => {
-    if (selectedBranchId) {
-      const branch = branches.find(b => b.id === selectedBranchId);
-      setSelectedBranch(branch);
-    } else {
-      setSelectedBranch(null);
-    }
-  }, [selectedBranchId, branches]);
-
-  const onSubmit = async (values: z.infer<typeof formSchema>) => {
-    if (!user) return;
-    
+  const fetchAssignedBranches = async () => {
+    setLoading(true);
     try {
-      setSubmitting(true);
-      
-      // Prepare data for submission
-      const visitData = {
-        ...values,
-        user_id: user.id,
-        branch_category: selectedBranch?.category, // Include branch_category from selectedBranch
-        status: "draft", // Initial status is draft
-        created_at: new Date().toISOString(),
-      };
-      
       const { data, error } = await supabase
-        .from("branch_visits")
-        .insert(visitData)
-        .select();
-        
+        .from('branch_assignments')
+        .select(`
+          branch_id,
+          branches:branch_id (
+            id,
+            name,
+            location,
+            category
+          )
+        `)
+        .eq('user_id', user!.id);
+
       if (error) throw error;
-      
-      toast({
-        title: "Visit report saved",
-        description: "Your visit report has been saved as a draft.",
+
+      // Transform data to make it easier to work with
+      const branches = data.map(item => {
+        return {
+          id: item.branches.id,
+          name: item.branches.name,
+          location: item.branches.location,
+          category: item.branches.category,
+        };
       });
-      
-      // Navigate to "My Visits" page
-      navigate("/bh/my-visits");
-    } catch (error: any) {
-      console.error("Error saving visit:", error);
+
+      setAssignedBranches(branches);
+    } catch (error) {
+      console.error('Error fetching branches:', error);
       toast({
         variant: "destructive",
-        title: "Failed to save visit",
-        description: error.message || "There was an error saving your visit report.",
+        title: "Error fetching branches",
+        description: "There was a problem loading your assigned branches.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onSubmit = async (values: FormValues, status: 'draft' | 'submitted' = 'draft') => {
+    if (!user) return;
+    
+    setSubmitting(true);
+    
+    try {
+      const visitData = {
+        id: editMode ? queryParams.get('edit') : uuidv4(),
+        user_id: user.id,
+        branch_id: values.branchId,
+        visit_date: values.visitDate.toISOString(),
+        status,
+        
+        hr_connect_session: values.hrConnectSession,
+        total_employees_invited: values.totalEmployeesInvited || 0,
+        total_participants: values.totalParticipants || 0,
+        
+        new_employees_total: values.newEmployeesTotal || 0,
+        new_employees_covered: values.newEmployeesCovered || 0,
+        star_employees_total: values.starEmployeesTotal || 0,
+        star_employees_covered: values.starEmployeesCovered || 0,
+        
+        manning_percentage: values.manningPercentage || 0,
+        attrition_percentage: values.attritionPercentage || 0,
+        non_vendor_percentage: values.nonVendorPercentage || 0,
+        er_percentage: values.erPercentage || 0,
+        cwt_cases: values.cwtCases || 0,
+        
+        performance_level: values.performanceLevel,
+        
+        leaders_aligned_with_code: values.leadersAlignedWithCode,
+        employees_feel_safe: values.employeesFeelSafe,
+        employees_feel_motivated: values.employeesFeelMotivated,
+        leaders_abusive_language: values.leadersAbusiveLanguage,
+        employees_comfort_escalation: values.employeesComfortEscalation,
+        inclusive_culture: values.inclusiveCulture,
+        
+        feedback: values.feedback,
+      };
+
+      let operation;
+      if (editMode) {
+        // Update existing visit
+        operation = supabase
+          .from('branch_visits')
+          .update(visitData)
+          .eq('id', visitData.id);
+      } else {
+        // Insert new visit
+        operation = supabase
+          .from('branch_visits')
+          .insert(visitData);
+      }
+
+      const { error } = await operation;
+      if (error) throw error;
+
+      toast({
+        title: editMode ? "Visit updated" : "Visit created",
+        description: status === 'draft' 
+          ? "Your visit report has been saved as a draft." 
+          : "Your visit report has been submitted for review.",
+        variant: "default",
+      });
+
+      navigate('/bh/my-visits');
+    } catch (error) {
+      console.error('Error saving visit:', error);
+      toast({
+        variant: "destructive",
+        title: "Error saving visit",
+        description: "There was a problem saving your visit report. Please try again.",
       });
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleSubmitForReview = async () => {
-    const values = form.getValues();
-    if (!user) return;
-    
-    try {
-      setSubmitting(true);
-      
-      // Prepare data for submission
-      const visitData = {
-        ...values,
-        user_id: user.id,
-        branch_category: selectedBranch?.category, // Include branch_category from selectedBranch
-        status: "submitted", // Set status to submitted
-        created_at: new Date().toISOString(),
-      };
-      
-      const { data, error } = await supabase
-        .from("branch_visits")
-        .insert(visitData)
-        .select();
-        
-      if (error) throw error;
-      
-      toast({
-        title: "Visit report submitted",
-        description: "Your visit report has been submitted for review.",
-      });
-      
-      navigate("/bh/my-visits");
-    } catch (error: any) {
-      console.error("Error submitting visit:", error);
-      toast({
-        variant: "destructive",
-        title: "Failed to submit visit",
-        description: error.message || "There was an error submitting your visit report.",
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleCancel = () => {
-    // Navigate back to "My Visits" page without saving
-    navigate("/bh/my-visits");
-  };
-
-  // Calculate HR Connect Session Coverage
-  const calculateCoverage = () => {
-    const totalInvited = form.getValues("total_employees_invited");
-    const totalParticipants = form.getValues("total_participants");
-    
-    if (!totalInvited || totalInvited === 0) return 0;
-    
-    return ((totalParticipants || 0) / totalInvited) * 100;
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
   };
 
   return (
-    <div className="container py-6 space-y-6 max-w-4xl">
-      <div className="flex justify-between items-center">
-        <h2 className="text-3xl font-bold">New Branch Visit</h2>
-      </div>
-      
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-          {/* Basic Visit Information */}
-          <div className="p-6 bg-white rounded-lg shadow">
-            <h3 className="text-xl font-semibold mb-4">Visit Information</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <FormField
-                control={form.control}
-                name="branch_id"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Branch</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select branch" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {branches.map((branch) => (
-                          <SelectItem key={branch.id} value={branch.id}>
-                            {branch.name} - {branch.location}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="visit_date"
-                render={({ field }) => (
-                  <FormItem className="flex flex-col">
-                    <FormLabel>Visit Date</FormLabel>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <FormControl>
-                          <Button
-                            variant={"outline"}
-                            className={cn(
-                              "w-full pl-3 text-left font-normal",
-                              !field.value && "text-muted-foreground"
-                            )}
-                          >
-                            {field.value ? (
-                              format(field.value, "PPP")
-                            ) : (
-                              <span>Pick a date</span>
-                            )}
-                            <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                          </Button>
-                        </FormControl>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar
-                          mode="single"
-                          selected={field.value}
-                          onSelect={field.onChange}
-                          disabled={(date) =>
-                            date > new Date() || date < new Date("1900-01-01")
-                          }
-                          initialFocus
-                        />
-                      </PopoverContent>
-                    </Popover>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            {/* Branch details display when branch is selected */}
-            {selectedBranch && (
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <p className="text-sm font-medium mb-1">Branch Code</p>
-                  <p className="text-base border border-input bg-background px-3 py-2 rounded-md">
-                    {selectedBranch.branch_code || "N/A"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm font-medium mb-1">Branch Category</p>
-                  <p className="text-base border border-input bg-background px-3 py-2 rounded-md capitalize">
-                    {selectedBranch.category || "N/A"}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4">
-              <h4 className="text-lg font-medium mb-2">HR Connect Session</h4>
-              <div className="flex space-x-2 mb-4">
-                <Button
-                  type="button"
-                  variant={hrConnectSession ? "default" : "outline"}
-                  className={`w-28 ${hrConnectSession ? "bg-green-500 hover:bg-green-600" : ""}`}
-                  onClick={() => form.setValue("hr_connect_session", true)}
-                >
-                  <Check className="mr-2 h-4 w-4" /> Yes
-                </Button>
-                <Button
-                  type="button"
-                  variant={!hrConnectSession ? "default" : "outline"}
-                  className={`w-28 ${!hrConnectSession ? "bg-red-500 hover:bg-red-600" : ""}`}
-                  onClick={() => form.setValue("hr_connect_session", false)}
-                >
-                  <X className="mr-2 h-4 w-4" /> No
-                </Button>
-              </div>
-              
-              {hrConnectSession && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4 border-t pt-4">
-                  <FormField
-                    control={form.control}
-                    name="total_employees_invited"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Total Employees Invited</FormLabel>
-                        <FormControl>
-                          <Input type="number" min="0" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
-                  <FormField
-                    control={form.control}
-                    name="total_participants"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Total Participants</FormLabel>
-                        <FormControl>
-                          <Input type="number" min="0" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <div>
-                    <p className="text-sm font-medium mb-1">Coverage (%)</p>
-                    <p className="text-base border border-input bg-background px-3 py-2 rounded-md">
-                      {calculateCoverage().toFixed(2)}%
-                    </p>
+    <div className="container mx-auto py-6">
+      <Card className="shadow-sm border-slate-200">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-2xl">{editMode ? 'Edit Branch Visit' : 'New Branch Visit'}</CardTitle>
+        </CardHeader>
+        
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit((values) => onSubmit(values, 'submitted'))}>
+            <CardContent>
+              <Tabs defaultValue="branch-info" value={activeTab} onValueChange={handleTabChange} className="w-full">
+                <TabsList className="grid grid-cols-1 md:grid-cols-4 mb-6">
+                  <TabsTrigger value="branch-info">Branch Info</TabsTrigger>
+                  <TabsTrigger value="hr-connect">HR Connect</TabsTrigger>
+                  <TabsTrigger value="metrics">Branch Metrics</TabsTrigger>
+                  <TabsTrigger value="assessment">Qualitative Assessment</TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="branch-info" className="mt-0">
+                  <div className="grid grid-cols-1 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <FormField
+                        control={form.control}
+                        name="branchId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Branch</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select a branch" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {assignedBranches.map((branch) => (
+                                  <SelectItem key={branch.id} value={branch.id}>
+                                    {branch.name} - {branch.location}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="visitDate"
+                        render={({ field }) => (
+                          <FormItem className="flex flex-col">
+                            <FormLabel>Visit Date</FormLabel>
+                            <DatePicker
+                              date={field.value}
+                              setDate={field.onChange}
+                            />
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          </div>
-          
-          {/* Branch Metrics */}
-          <div className="p-6 bg-white rounded-lg shadow">
-            <h3 className="text-xl font-semibold mb-4">Branch Metrics</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <FormField
-                control={form.control}
-                name="manning_percentage"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Manning Percentage (%)</FormLabel>
-                    <FormControl>
-                      <Input type="number" min="0" max="100" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="attrition_percentage"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Attrition Percentage (%)</FormLabel>
-                    <FormControl>
-                      <Input type="number" min="0" max="100" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="non_vendor_percentage"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Non-Vendor Percentage (%)</FormLabel>
-                    <FormControl>
-                      <Input type="number" min="0" max="100" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="er_percentage"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>ER Percentage (%)</FormLabel>
-                    <FormControl>
-                      <Input type="number" min="0" max="100" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="cwt_cases"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>CWT Cases</FormLabel>
-                    <FormControl>
-                      <Input type="number" min="0" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="performance_level"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Performance Level</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select level" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="high">High</SelectItem>
-                        <SelectItem value="medium">Medium</SelectItem>
-                        <SelectItem value="low">Low</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
-          
-          {/* Employee Coverage */}
-          <div className="p-6 bg-white rounded-lg shadow">
-            <h3 className="text-xl font-semibold mb-4">Employee Coverage</h3>
-            
-            <div className="mb-6">
-              <h4 className="text-lg font-medium mb-3">New Employees (0-6 months)</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                  control={form.control}
-                  name="new_employees_total"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Total New Employees</FormLabel>
-                      <FormControl>
-                        <Input type="number" min="0" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                </TabsContent>
                 
-                <FormField
-                  control={form.control}
-                  name="new_employees_covered"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>New Employees Covered</FormLabel>
-                      <FormControl>
-                        <Input type="number" min="0" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            </div>
-            
-            <div>
-              <h4 className="text-lg font-medium mb-3">STAR Employees</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <FormField
-                  control={form.control}
-                  name="star_employees_total"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Total STAR Employees</FormLabel>
-                      <FormControl>
-                        <Input type="number" min="0" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                
-                <FormField
-                  control={form.control}
-                  name="star_employees_covered"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>STAR Employees Covered</FormLabel>
-                      <FormControl>
-                        <Input type="number" min="0" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            </div>
-          </div>
-          
-          {/* Qualitative Assessment */}
-          <div className="p-6 bg-white rounded-lg shadow">
-            <h3 className="text-xl font-semibold mb-4">Qualitative Assessment</h3>
-            <div className="space-y-6">
-              <FormField
-                control={form.control}
-                name="leaders_aligned_with_code"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Are leaders aligned with the organization code?</FormLabel>
-                    <div className="flex space-x-2">
-                      <Button
-                        type="button"
-                        variant={field.value === "good" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
-                        onClick={() => form.setValue("leaders_aligned_with_code", "good")}
-                      >
-                        <Check className="mr-2 h-4 w-4" /> Yes
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={field.value === "poor" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
-                        onClick={() => form.setValue("leaders_aligned_with_code", "poor")}
-                      >
-                        <X className="mr-2 h-4 w-4" /> No
-                      </Button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="employees_feel_safe"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Do employees feel safe?</FormLabel>
-                    <div className="flex space-x-2">
-                      <Button
-                        type="button"
-                        variant={field.value === "good" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
-                        onClick={() => form.setValue("employees_feel_safe", "good")}
-                      >
-                        <Check className="mr-2 h-4 w-4" /> Yes
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={field.value === "poor" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
-                        onClick={() => form.setValue("employees_feel_safe", "poor")}
-                      >
-                        <X className="mr-2 h-4 w-4" /> No
-                      </Button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="employees_feel_motivated"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Are employees motivated?</FormLabel>
-                    <div className="flex space-x-2">
-                      <Button
-                        type="button"
-                        variant={field.value === "good" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
-                        onClick={() => form.setValue("employees_feel_motivated", "good")}
-                      >
-                        <Check className="mr-2 h-4 w-4" /> Yes
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={field.value === "poor" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
-                        onClick={() => form.setValue("employees_feel_motivated", "poor")}
-                      >
-                        <X className="mr-2 h-4 w-4" /> No
-                      </Button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="leaders_abusive_language"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Do leaders use abusive language?</FormLabel>
-                    <div className="flex space-x-2">
-                      <Button
-                        type="button"
-                        variant={field.value === "good" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
-                        onClick={() => form.setValue("leaders_abusive_language", "good")}
-                      >
-                        <Check className="mr-2 h-4 w-4" /> Yes
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={field.value === "poor" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
-                        onClick={() => form.setValue("leaders_abusive_language", "poor")}
-                      >
-                        <X className="mr-2 h-4 w-4" /> No
-                      </Button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="employees_comfort_escalation"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Are employees comfortable with escalation process?</FormLabel>
-                    <div className="flex space-x-2">
-                      <Button
-                        type="button"
-                        variant={field.value === "good" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
-                        onClick={() => form.setValue("employees_comfort_escalation", "good")}
-                      >
-                        <Check className="mr-2 h-4 w-4" /> Yes
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={field.value === "poor" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
-                        onClick={() => form.setValue("employees_comfort_escalation", "poor")}
-                      >
-                        <X className="mr-2 h-4 w-4" /> No
-                      </Button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="inclusive_culture"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Is there an inclusive culture?</FormLabel>
-                    <div className="flex space-x-2">
-                      <Button
-                        type="button"
-                        variant={field.value === "good" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "good" ? "bg-green-500 hover:bg-green-600" : ""}`}
-                        onClick={() => form.setValue("inclusive_culture", "good")}
-                      >
-                        <Check className="mr-2 h-4 w-4" /> Yes
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={field.value === "poor" ? "default" : "outline"}
-                        className={`w-28 ${field.value === "poor" ? "bg-red-500 hover:bg-red-600" : ""}`}
-                        onClick={() => form.setValue("inclusive_culture", "poor")}
-                      >
-                        <X className="mr-2 h-4 w-4" /> No
-                      </Button>
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
-          
-          {/* Additional Remarks (formerly Feedback) */}
-          <div className="p-6 bg-white rounded-lg shadow">
-            <h3 className="text-xl font-semibold mb-4">Additional Remarks</h3>
-            <FormField
-              control={form.control}
-              name="feedback"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Additional Remarks</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder="Enter your observations and remarks..."
-                      className="h-32"
-                      {...field}
+                <TabsContent value="hr-connect" className="mt-0">
+                  <div className="grid grid-cols-1 gap-6">
+                    <FormField
+                      control={form.control}
+                      name="hrConnectSession"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                          <FormControl>
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                            />
+                          </FormControl>
+                          <div className="space-y-1 leading-none">
+                            <FormLabel>HR Connect Session Conducted</FormLabel>
+                            <FormDescription>
+                              Check this if an HR Connect session was conducted during this visit
+                            </FormDescription>
+                          </div>
+                        </FormItem>
+                      )}
                     />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-          
-          <div className="flex justify-end gap-4">
-            <Button type="button" variant="outline" onClick={handleCancel}>
-              <X className="mr-2 h-4 w-4" /> Cancel
-            </Button>
-            <Button 
-              type="button" 
-              className="bg-amber-500 hover:bg-amber-600"
-              onClick={form.handleSubmit(onSubmit)}
-              disabled={submitting}
-            >
-              <Save className="mr-2 h-4 w-4" /> {submitting ? "Saving..." : "Save as Draft"}
-            </Button>
-            <Button
-              type="button"
-              onClick={handleSubmitForReview}
-              disabled={submitting}
-            >
-              <Send className="mr-2 h-4 w-4" /> {submitting ? "Submitting..." : "Submit for Review"}
-            </Button>
-          </div>
-        </form>
-      </Form>
+                    
+                    {watchHrConnectSession && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormField
+                          control={form.control}
+                          name="totalEmployeesInvited"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Total Employees Invited</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  {...field}
+                                  onChange={(e) => {
+                                    const value = parseInt(e.target.value);
+                                    field.onChange(isNaN(value) ? 0 : value);
+                                  }}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        
+                        <FormField
+                          control={form.control}
+                          name="totalParticipants"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Total Participants</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  {...field}
+                                  onChange={(e) => {
+                                    const value = parseInt(e.target.value);
+                                    field.onChange(isNaN(value) ? 0 : value);
+                                  }}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        
+                        <div>
+                          <div className="text-sm font-medium mb-2">Coverage</div>
+                          <div className="bg-slate-100 p-2 rounded text-center">
+                            <span className="text-xl font-semibold">{hrConnectCoverage}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div>
+                      <h3 className="font-medium mb-3">Employee Coverage</h3>
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div>
+                            <h4 className="text-sm mb-3">New Employees (0-6 months)</h4>
+                            <div className="grid grid-cols-2 gap-4">
+                              <FormField
+                                control={form.control}
+                                name="newEmployeesTotal"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Total</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        {...field}
+                                        onChange={(e) => {
+                                          const value = parseInt(e.target.value);
+                                          field.onChange(isNaN(value) ? 0 : value);
+                                        }}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              
+                              <FormField
+                                control={form.control}
+                                name="newEmployeesCovered"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Covered</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        {...field}
+                                        onChange={(e) => {
+                                          const value = parseInt(e.target.value);
+                                          field.onChange(isNaN(value) ? 0 : value);
+                                        }}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <h4 className="text-sm mb-3">STAR Employees</h4>
+                            <div className="grid grid-cols-2 gap-4">
+                              <FormField
+                                control={form.control}
+                                name="starEmployeesTotal"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Total</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        {...field}
+                                        onChange={(e) => {
+                                          const value = parseInt(e.target.value);
+                                          field.onChange(isNaN(value) ? 0 : value);
+                                        }}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              
+                              <FormField
+                                control={form.control}
+                                name="starEmployeesCovered"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Covered</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="number"
+                                        min="0"
+                                        {...field}
+                                        onChange={(e) => {
+                                          const value = parseInt(e.target.value);
+                                          field.onChange(isNaN(value) ? 0 : value);
+                                        }}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+                
+                <TabsContent value="metrics" className="mt-0">
+                  <div className="grid grid-cols-1 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <FormField
+                        control={form.control}
+                        name="manningPercentage"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Manning Percentage</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="0"
+                                max="100"
+                                {...field}
+                                onChange={(e) => {
+                                  const value = parseInt(e.target.value);
+                                  field.onChange(isNaN(value) ? 0 : Math.min(value, 100));
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Enter value from 0-100%
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="attritionPercentage"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Attrition Percentage</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="0"
+                                max="100"
+                                {...field}
+                                onChange={(e) => {
+                                  const value = parseInt(e.target.value);
+                                  field.onChange(isNaN(value) ? 0 : Math.min(value, 100));
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Enter value from 0-100%
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="nonVendorPercentage"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Non-Vendor Percentage</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="0"
+                                max="100"
+                                {...field}
+                                onChange={(e) => {
+                                  const value = parseInt(e.target.value);
+                                  field.onChange(isNaN(value) ? 0 : Math.min(value, 100));
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Enter value from 0-100%
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <FormField
+                        control={form.control}
+                        name="erPercentage"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>ER Percentage</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="0"
+                                max="100"
+                                {...field}
+                                onChange={(e) => {
+                                  const value = parseInt(e.target.value);
+                                  field.onChange(isNaN(value) ? 0 : Math.min(value, 100));
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Enter value from 0-100%
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="cwtCases"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>CWT Cases</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="0"
+                                {...field}
+                                onChange={(e) => {
+                                  const value = parseInt(e.target.value);
+                                  field.onChange(isNaN(value) ? 0 : value);
+                                }}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="performanceLevel"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Performance Level</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select level" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="below_expectations">Below Expectations</SelectItem>
+                                <SelectItem value="meets_expectations">Meets Expectations</SelectItem>
+                                <SelectItem value="exceeds_expectations">Exceeds Expectations</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  </div>
+                </TabsContent>
+                
+                <TabsContent value="assessment" className="mt-0">
+                  <div className="grid grid-cols-1 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <FormField
+                        control={form.control}
+                        name="leadersAlignedWithCode"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Leaders Aligned with Code</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={field.onChange}
+                                defaultValue={field.value}
+                                className="flex flex-col space-y-1"
+                              >
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="very_poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Very Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="neutral" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Neutral
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="good" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Good
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="excellent" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Excellent
+                                  </FormLabel>
+                                </FormItem>
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="employeesFeelSafe"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Employees Feel Safe</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={field.onChange}
+                                defaultValue={field.value}
+                                className="flex flex-col space-y-1"
+                              >
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="very_poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Very Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="neutral" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Neutral
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="good" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Good
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="excellent" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Excellent
+                                  </FormLabel>
+                                </FormItem>
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <FormField
+                        control={form.control}
+                        name="employeesFeelMotivated"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Employees Feel Motivated</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={field.onChange}
+                                defaultValue={field.value}
+                                className="flex flex-col space-y-1"
+                              >
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="very_poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Very Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="neutral" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Neutral
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="good" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Good
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="excellent" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Excellent
+                                  </FormLabel>
+                                </FormItem>
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="leadersAbusiveLanguage"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Leaders Use Abusive Language</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={field.onChange}
+                                defaultValue={field.value}
+                                className="flex flex-col space-y-1"
+                              >
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="very_poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Very Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="neutral" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Neutral
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="good" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Good
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="excellent" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Excellent
+                                  </FormLabel>
+                                </FormItem>
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <FormField
+                        control={form.control}
+                        name="employeesComfortEscalation"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Employees Comfortable with Escalation</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={field.onChange}
+                                defaultValue={field.value}
+                                className="flex flex-col space-y-1"
+                              >
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="very_poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Very Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="neutral" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Neutral
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="good" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Good
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="excellent" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Excellent
+                                  </FormLabel>
+                                </FormItem>
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="inclusiveCulture"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Inclusive Culture</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={field.onChange}
+                                defaultValue={field.value}
+                                className="flex flex-col space-y-1"
+                              >
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="very_poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Very Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="poor" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Poor
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="neutral" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Neutral
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="good" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Good
+                                  </FormLabel>
+                                </FormItem>
+                                <FormItem className="flex items-center space-x-3 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value="excellent" />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">
+                                    Excellent
+                                  </FormLabel>
+                                </FormItem>
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    
+                    <FormField
+                      control={form.control}
+                      name="feedback"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Additional Remarks</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              placeholder="Add any additional feedback or remarks about the visit"
+                              className="min-h-[100px]"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+            <CardFooter className="flex justify-between border-t pt-6">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => navigate('/bh/my-visits')}
+              >
+                Cancel
+              </Button>
+              <div className="flex gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex gap-2 border-blue-500 text-blue-600 hover:bg-blue-50"
+                  onClick={() => form.handleSubmit((values) => onSubmit(values, 'draft'))()}
+                  disabled={submitting}
+                >
+                  {submitting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  Save as Draft
+                </Button>
+                <Button 
+                  type="submit" 
+                  className="flex gap-2"
+                  disabled={submitting}
+                >
+                  {submitting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                  Submit
+                </Button>
+              </div>
+            </CardFooter>
+          </form>
+        </Form>
+      </Card>
     </div>
   );
 };

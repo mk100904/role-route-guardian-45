@@ -15,6 +15,7 @@ import BHDashboardLayout from "./components/bh/BHDashboardLayout";
 import BHDashboard from "./pages/BHDashboard";
 import NewVisit from "./pages/NewVisit";
 import MyVisits from "./pages/MyVisits";
+import EditVisit from "./pages/EditVisit";
 import ZHDashboardLayout from "./components/zh/ZHDashboardLayout";
 import ZHDashboard from "./pages/ZHDashboard";
 import ZHBranchMapping from "./pages/ZHBranchMapping";
@@ -39,6 +40,7 @@ const AppRoutes = () => (
       <Route path="dashboard" element={<BHDashboard />} />
       <Route path="new-visit" element={<NewVisit />} />
       <Route path="my-visits" element={<MyVisits />} />
+      <Route path="edit-visit/:visitId" element={<EditVisit />} />
     </Route>
     
     {/* ZH routes with layout */}
