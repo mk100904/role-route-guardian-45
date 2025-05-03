@@ -1,4 +1,3 @@
-
 import React from "react";
 import {
   Dialog,
@@ -9,22 +8,33 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { X, Clock, Eye, CheckCircle, AlertTriangle } from "lucide-react";
+import { X, Clock, Eye, CheckCircle, AlertTriangle, Edit, Trash2 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { Database } from "@/integrations/supabase/types";
 
-import { BranchVisitSummary } from "@/services/reportService";
+type BranchVisitWithBranch = Database["public"]["Tables"]["branch_visits"]["Row"] & {
+  branches: {
+    name: string;
+    location: string;
+    category: string;
+    branch_code?: string;
+  }
+};
 
 interface BranchVisitDetailsModalProps {
-  visit: BranchVisitSummary | null;
+  visit: BranchVisitWithBranch | null;
   isOpen: boolean;
   onClose: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }
 
 const BranchVisitDetailsModal = ({
   visit,
   isOpen,
-  onClose
+  onClose,
+  onEdit,
+  onDelete
 }: BranchVisitDetailsModalProps) => {
   if (!visit) return null;
 
@@ -94,6 +104,9 @@ const BranchVisitDetailsModal = ({
 
   const statusBadge = getStatusBadge(visit.status);
 
+  // Show edit and delete buttons only for draft status
+  const isDraft = visit.status === 'draft';
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -134,6 +147,7 @@ const BranchVisitDetailsModal = ({
             </div>
           </div>
           
+          {/* Visit Information content */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div>
               <h3 className="text-sm font-medium text-slate-500 mb-2">Visit Information</h3>
@@ -177,6 +191,7 @@ const BranchVisitDetailsModal = ({
             </div>
           </div>
           
+          {/* Branch Metrics */}
           <div className="mb-6">
             <h3 className="text-sm font-medium text-slate-500 mb-2">Branch Metrics</h3>
             <div className="bg-slate-50 rounded-md p-4">
@@ -209,6 +224,7 @@ const BranchVisitDetailsModal = ({
             </div>
           </div>
           
+          {/* Employee Coverage */}
           <div className="mb-6">
             <h3 className="text-sm font-medium text-slate-500 mb-2">Employee Coverage</h3>
             <div className="bg-slate-50 rounded-md p-4">
@@ -244,6 +260,7 @@ const BranchVisitDetailsModal = ({
             </div>
           </div>
           
+          {/* Qualitative Assessment */}
           <div className="mb-6">
             <h3 className="text-base font-medium mb-2">Qualitative Assessment</h3>
             <div className="bg-slate-50 rounded-md p-4">
@@ -276,9 +293,10 @@ const BranchVisitDetailsModal = ({
             </div>
           </div>
           
+          {/* Additional Remarks */}
           {visit.feedback && (
             <div className="mb-6">
-              <h3 className="text-base font-medium mb-2">Overall Feedback</h3>
+              <h3 className="text-base font-medium mb-2">Additional Remarks</h3>
               <div className="bg-slate-50 rounded-md p-4">
                 <p className="text-sm">{visit.feedback}</p>
               </div>
@@ -286,7 +304,22 @@ const BranchVisitDetailsModal = ({
           )}
         </div>
         
-        <div className="flex justify-end">
+        <div className="flex justify-between">
+          <div className="flex gap-2">
+            {/* Edit and Delete buttons for draft status */}
+            {isDraft && onEdit && (
+              <Button variant="outline" className="border-blue-500 text-blue-600 hover:bg-blue-50" onClick={onEdit}>
+                <Edit className="mr-2 h-4 w-4" /> Edit
+              </Button>
+            )}
+            
+            {isDraft && onDelete && (
+              <Button variant="outline" className="border-red-500 text-red-600 hover:bg-red-50" onClick={onDelete}>
+                <Trash2 className="mr-2 h-4 w-4" /> Delete
+              </Button>
+            )}
+          </div>
+          
           <DialogClose asChild>
             <Button variant="outline" onClick={onClose}>Close</Button>
           </DialogClose>

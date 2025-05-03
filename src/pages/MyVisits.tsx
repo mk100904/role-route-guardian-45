@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FilePlus, Search, Filter, Calendar as CalendarIcon, Eye, Clock, CheckCircle, X } from "lucide-react";
+import { FilePlus, Search, Filter, Calendar as CalendarIcon, Eye, Clock, CheckCircle, X, Edit, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -31,6 +31,8 @@ import { toast } from "@/components/ui/use-toast";
 import { Database } from "@/integrations/supabase/types";
 import BranchVisitDetailsModal from "@/components/branch/BranchVisitDetailsModal";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import ConfirmationDialog from "@/components/ui/confirmation-dialog";
+import { supabase } from "@/integrations/supabase/client";
 
 type BranchVisitWithBranch = Database["public"]["Tables"]["branch_visits"]["Row"] & {
   branches: {
@@ -53,6 +55,10 @@ const MyVisits = () => {
   const [selectedVisit, setSelectedVisit] = useState<BranchVisitWithBranch | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const isMobile = useIsMobile();
+  
+  // New state for delete confirmation dialog
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [visitToDelete, setVisitToDelete] = useState<string | null>(null);
   
   useEffect(() => {
     const fetchVisits = async () => {
@@ -182,6 +188,55 @@ const MyVisits = () => {
   
   const handleCloseModal = () => {
     setIsModalOpen(false);
+  };
+  
+  // New functions for edit and delete
+  const handleEditVisit = (visitId: string) => {
+    navigate(`/bh/edit-visit/${visitId}`);
+  };
+  
+  const handleDeleteClick = (visitId: string) => {
+    setVisitToDelete(visitId);
+    setIsDeleteDialogOpen(true);
+  };
+  
+  const handleDeleteConfirm = async () => {
+    if (!visitToDelete) return;
+    
+    try {
+      const { error } = await supabase
+        .from("branch_visits")
+        .delete()
+        .eq("id", visitToDelete);
+        
+      if (error) throw error;
+      
+      // Remove the deleted visit from state
+      const updatedVisits = visits.filter(visit => visit.id !== visitToDelete);
+      setVisits(updatedVisits);
+      setFilteredVisits(updatedVisits);
+      
+      toast({
+        title: "Visit deleted",
+        description: "The visit report has been successfully deleted.",
+      });
+      
+      // Close the dialogs
+      setIsDeleteDialogOpen(false);
+      setIsModalOpen(false);
+    } catch (error: any) {
+      console.error("Error deleting visit:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to delete the visit report.",
+      });
+    }
+  };
+  
+  const handleDeleteCancel = () => {
+    setVisitToDelete(null);
+    setIsDeleteDialogOpen(false);
   };
   
   return (
@@ -419,14 +474,27 @@ const MyVisits = () => {
                     </div>
                   </div>
                   
-                  <Button 
-                    variant="outline" 
-                    className="w-full text-sm"
-                    onClick={() => handleViewDetails(visit)}
-                  >
-                    <Eye className="mr-2 h-4 w-4" />
-                    View Details
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button 
+                      variant="outline" 
+                      className="flex-1 text-sm"
+                      onClick={() => handleViewDetails(visit)}
+                    >
+                      <Eye className="mr-2 h-4 w-4" />
+                      View Details
+                    </Button>
+                    
+                    {/* Only show Edit button for draft status */}
+                    {visit.status === 'draft' && (
+                      <Button
+                        variant="outline"
+                        className="text-blue-600 border-blue-600"
+                        onClick={() => handleEditVisit(visit.id)}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             );
@@ -434,11 +502,25 @@ const MyVisits = () => {
         </div>
       )}
       
-      {/* Details Modal */}
+      {/* Details Modal - Update to pass edit and delete handlers */}
       <BranchVisitDetailsModal
         visit={selectedVisit}
         isOpen={isModalOpen}
         onClose={handleCloseModal}
+        onEdit={selectedVisit?.status === 'draft' ? () => selectedVisit && handleEditVisit(selectedVisit.id) : undefined}
+        onDelete={selectedVisit?.status === 'draft' ? () => selectedVisit && handleDeleteClick(selectedVisit.id) : undefined}
+      />
+      
+      {/* Delete Confirmation Dialog */}
+      <ConfirmationDialog
+        isOpen={isDeleteDialogOpen}
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+        title="Delete Visit Report"
+        description="Are you sure you want to delete this visit report? This action cannot be undone."
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="destructive"
       />
     </div>
   );
