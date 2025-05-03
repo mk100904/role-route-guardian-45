@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { CalendarIcon, Check, X } from "lucide-react";
+import { CalendarIcon, Check, X, Save, Send } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
@@ -162,6 +162,7 @@ const NewVisit = () => {
       const visitData = {
         ...values,
         user_id: user.id,
+        branch_category: selectedBranch?.category, // Include branch_category from selectedBranch
         status: "draft", // Initial status is draft
         created_at: new Date().toISOString(),
       };
@@ -203,6 +204,7 @@ const NewVisit = () => {
       const visitData = {
         ...values,
         user_id: user.id,
+        branch_category: selectedBranch?.category, // Include branch_category from selectedBranch
         status: "submitted", // Set status to submitted
         created_at: new Date().toISOString(),
       };
@@ -757,18 +759,18 @@ const NewVisit = () => {
             </div>
           </div>
           
-          {/* Feedback */}
+          {/* Additional Remarks (formerly Feedback) */}
           <div className="p-6 bg-white rounded-lg shadow">
-            <h3 className="text-xl font-semibold mb-4">Feedback</h3>
+            <h3 className="text-xl font-semibold mb-4">Additional Remarks</h3>
             <FormField
               control={form.control}
               name="feedback"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Overall Feedback</FormLabel>
+                  <FormLabel>Additional Remarks</FormLabel>
                   <FormControl>
                     <Textarea
-                      placeholder="Enter your observations and feedback..."
+                      placeholder="Enter your observations and remarks..."
                       className="h-32"
                       {...field}
                     />
@@ -781,7 +783,7 @@ const NewVisit = () => {
           
           <div className="flex justify-end gap-4">
             <Button type="button" variant="outline" onClick={handleCancel}>
-              Cancel
+              <X className="mr-2 h-4 w-4" /> Cancel
             </Button>
             <Button 
               type="button" 
@@ -789,14 +791,14 @@ const NewVisit = () => {
               onClick={form.handleSubmit(onSubmit)}
               disabled={submitting}
             >
-              {submitting ? "Saving..." : "Save as Draft"}
+              <Save className="mr-2 h-4 w-4" /> {submitting ? "Saving..." : "Save as Draft"}
             </Button>
             <Button
               type="button"
               onClick={handleSubmitForReview}
               disabled={submitting}
             >
-              {submitting ? "Submitting..." : "Submit for Review"}
+              <Send className="mr-2 h-4 w-4" /> {submitting ? "Submitting..." : "Submit for Review"}
             </Button>
           </div>
         </form>
